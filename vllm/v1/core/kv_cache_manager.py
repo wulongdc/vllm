@@ -90,6 +90,10 @@ class KVCacheBlocks:
         if allow_none and all(len(group) == 0 for group in self.blocks):
             return None
         return tuple([blk.block_id for blk in group] for group in self.blocks)
+    
+    def get_block_ids_all_groups(self) -> list[int]:
+        """Get block_ids of all blocks in all groups from KVCacheBlocks instance."""
+        return [block.block_id for group in self.blocks for block in group]
 
     def get_unhashed_block_ids(self) -> list[int]:
         """Get block_ids of unhashed blocks from KVCacheBlocks instance."""
@@ -696,6 +700,10 @@ class KVCacheManager:
     def get_block_ids(self, request_id: str) -> tuple[list[int], ...]:
         """Get the block ids of a request."""
         return self.get_blocks(request_id).get_block_ids()
+    
+    def get_block_ids_all_groups(self, request_id: str) -> list[int]:
+        """Get the block ids of a request across all groups."""
+        return self.get_blocks(request_id).get_block_ids_all_groups()
 
     def get_block_ids_for_computed_tokens(
         self,
