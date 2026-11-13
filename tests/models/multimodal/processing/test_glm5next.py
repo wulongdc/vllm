@@ -31,6 +31,7 @@ from vllm.distributed.ec_transfer.ec_connector.utils import (
     collect_ec_item_metadata,
 )
 from vllm.model_executor.layers.fusion.mm_input_norm import build_mm_input_norm
+from vllm.models.glm5next.common.multimodal import Glm5NextProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalFeatureSpec
 from vllm.platforms import current_platform
@@ -240,17 +241,74 @@ def _pixel_path_grid(
 
 
 @pytest.mark.parametrize(
+    ("budget", "num_frames", "height", "width", "expected_grid"),
+    [
+        (14_400, 2, 5600, 5600, (1, 240, 240)),
+        (40_000, 2, 5600, 5600, (1, 400, 400)),
+        (240_000, 32, 2060, 3416, (16, 148, 244)),
+    ],
+)
+def test_video_token_budget_is_not_capped(
+    processor, budget, num_frames, height, width, expected_grid
+):
+    """Video processor budgets above 30k retain their resize geometry."""
+    video_processor = processor.info.get_video_processor(max_image_tokens=budget)
+    assert video_processor.max_image_tokens == budget
+    assert _pixel_path_grid(video_processor, num_frames, height, width) == expected_grid
+
+
+def test_video_checkpoint_budget_is_not_capped(processor):
+    info = processor.info
+    assert info.get_video_processor().max_image_tokens == 240_000
+    assert info._get_video_max_pixels() == 240_000 * 2 * 28 * 28
+    assert info.get_hf_processor().image_processor.max_image_tokens == 8000
+    _, num_tokens = info._get_vision_info(
+        image_width=3416, image_height=2060, num_frames=32
+    )
+    assert num_tokens == 144_448
+
+
+def test_video_profiling_hints_preserve_runtime_budget():
+    """Smaller profiling inputs must not cap real video preprocessing."""
+    ctx = build_model_context(
+        "zai-org/GLM-5.3-Flash",
+        limit_mm_per_prompt={
+            "image": 0,
+            "video": {"count": 1, "num_frames": 2, "height": 280, "width": 280},
+        },
+    )
+    processor = MULTIMODAL_REGISTRY.create_processor(
+        ctx.model_config, tokenizer=ctx.tokenizer
+    )
+    dummy = processor.get_dummy_mm_inputs({"video": 1})
+    video_item = dummy["mm_kwargs"]["video"][0]
+    assert video_item is not None
+    item = video_item.get_data()
+    grid = item["video_grid_thw"]
+    pixels = item["pixel_values_videos"]
+    assert isinstance(grid, torch.Tensor)
+    assert isinstance(pixels, torch.Tensor)
+    assert grid.tolist() == [1, 20, 20]
+    assert pixels.shape[0] == 400
+    info = processor.info
+    assert isinstance(info, Glm5NextProcessingInfo)
+    video_processor = info.get_video_processor()
+    assert video_processor.max_image_tokens == 240_000
+    assert _pixel_path_grid(video_processor, 32, 2060, 3416) == (16, 148, 244)
+
+
+@pytest.mark.parametrize(
     ("total_num_frames", "fps", "duration", "height", "width", "expected_grid"),
     [
         # 4 s at 8 fps: the GLM-4.6V sampler asks for 3x as many timestamps.
         (32, 8.0, 4.0, 480, 640, (4, 36, 46)),
         # 1080p, 20 s: same factor of 3 at a full-size canvas.
-        (600, 30.0, 20.0, 1080, 1920, (20, 58, 102)),
+        (600, 30.0, 20.0, 1080, 1920, (20, 78, 138)),
         # 1080p, 60 s: the one duration window where the two samplers agree
         # anyway -- a regression guard, the count must not move.
-        (1800, 30.0, 60.0, 1080, 1920, (60, 34, 58)),
+        (1800, 30.0, 60.0, 1080, 1920, (60, 78, 138)),
         # Past 300 s the GLM-4.6V sampler asks for half as many instead.
-        (9030, 30.0, 301.0, 720, 1280, (301, 14, 26)),
+        (9030, 30.0, 301.0, 720, 1280, (301, 42, 74)),
     ],
 )
 def test_video_placeholders_match_encoder_rows(

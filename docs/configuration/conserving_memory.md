@@ -171,6 +171,30 @@ For backward compatibility, passing an integer works as before and is interprete
 !!! warning
     These size hints currently only affect activation memory profiling. Encoder cache size is determined by the actual inputs at runtime and is not limited by these hints.
 
+### GLM-5.3-Flash video profiling
+
+GLM-5.3-Flash uses the checkpoint video processor's `max_image_tokens` budget
+(240,000 for `zai-org/GLM-5.3-Flash`), without an implicit 30,000-token cap.
+Explicit processor budget overrides are also respected. The image processor
+retains its separate checkpoint budget of 8,000 tokens.
+
+The larger video budget also increases the default startup encoder profiling
+workload. It can cause an out-of-memory error or leave less memory for the KV
+cache. `max_num_batched_tokens` does not cap this encoder profiling pass.
+To profile a smaller, representative video without changing real video
+preprocessing, add size hints to your deployment's arguments, for example:
+
+```bash
+--limit-mm-per-prompt '{"image": 0, "video": {"count": 1, "num_frames": 32, "width": 640, "height": 640}}'
+```
+
+This example disables images; set the image limit to match your workload if
+needed. Size hints are not runtime limits: validate peak GPU memory with the
+largest videos and concurrency you intend to serve. Smaller profiling inputs
+can under-reserve encoder activation memory, so they do not guarantee that
+larger requests will fit. Skipping multimodal profiling likewise does not
+remove the encoder's runtime memory requirements.
+
 ## Multi-modal processor arguments
 
 For certain models, you can adjust the multi-modal processor arguments to

@@ -637,9 +637,6 @@ class Glm5NextVisionTransformer(nn.Module):
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
 
-_MAX_VIDEO_TOKENS = 30000
-
-
 class Glm5NextProcessingInfo(Glm4vProcessingInfo):
     """Token-budget geometry for the multimodal checkpoint.
 
@@ -647,15 +644,6 @@ class Glm5NextProcessingInfo(Glm4vProcessingInfo):
     (`min_image_tokens` / `max_image_tokens`) with no `size` key, so the
     inherited Glm4v `size.longest_edge` path does not apply.
     """
-
-    def get_hf_processor(self, **kwargs: object):
-        processor = super().get_hf_processor(**kwargs)
-        # Cap video inputs to keep encoder profiling from starving the KV cache.
-        video_processor = processor.video_processor
-        video_processor.max_image_tokens = min(
-            video_processor.max_image_tokens, _MAX_VIDEO_TOKENS
-        )
-        return processor
 
     @staticmethod
     def _alignment_factor(proc) -> int:
@@ -783,7 +771,7 @@ class Glm5NextProcessingInfo(Glm4vProcessingInfo):
         image_height: int,
         num_frames: int = 16,
         do_resize: bool = True,
-        max_image_pixels: int = 28 * 28 * 2 * 30000,
+        max_image_pixels: int | None = None,
     ) -> tuple[ImageSize, int]:
         """GLM-5.3-Flash canvas geometry for token budgeting and dummy inputs.
 
@@ -801,6 +789,9 @@ class Glm5NextProcessingInfo(Glm4vProcessingInfo):
         patch_size = vision_config.patch_size
         merge_size = vision_config.spatial_merge_size
         temporal_patch_size = vision_config.temporal_patch_size
+
+        if max_image_pixels is None:
+            max_image_pixels = self._get_video_max_pixels()
 
         image_processor = self.get_hf_processor().image_processor
         factor = self._alignment_factor(image_processor)
